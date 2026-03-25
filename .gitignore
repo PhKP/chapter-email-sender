@@ -1,0 +1,11 @@
+# Secrets and user config
+.env
+
+# Claude Code local settings
+.claude
+
+# Runtime state and logs
+data/
+
+# Python
+__pycache__/

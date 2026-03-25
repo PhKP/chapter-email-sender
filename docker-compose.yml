@@ -1,0 +1,8 @@
+services:
+  email-sender:
+    image: ghcr.io/phkp/chapter-email-sender:latest
+    container_name: email-sender
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/data

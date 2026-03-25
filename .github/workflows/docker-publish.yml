@@ -1,0 +1,68 @@
+name: Publish Docker image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v1.0.0-beta.1). Leave empty to build current branch."
+        required: false
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Resolve version tag
+        id: version
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          echo "value=${TAG#v}" >> $GITHUB_OUTPUT
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          flavor: |
+            latest=false
+          tags: |
+            type=ref,event=branch,enable=${{ github.event.inputs.tag == '' }}
+            type=semver,pattern={{version}},enable=${{ github.event.inputs.tag == '' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ github.event.inputs.tag == '' }}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') && github.event.inputs.tag == '' }}
+            type=raw,value=${{ steps.version.outputs.value }},enable=${{ github.event.inputs.tag != '' }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: VERSION=${{ github.event.inputs.tag || github.ref_name }}
+
+      - name: Delete untagged package versions
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: chapter-email-sender
+          package-type: container
+          delete-only-untagged-versions: true

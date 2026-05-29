@@ -46,8 +46,14 @@ class ChapterParser(HTMLParser):
         self._in_footer = False
         self._in_h1 = False
         self._in_p = False
+        self._in_li = False
         self._p_class = None
         self._buf = []
+
+    @staticmethod
+    def _clean(parts):
+        # Collapse runs of whitespace (incl. source newlines) to single spaces.
+        return " ".join(unescape("".join(parts)).split())
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
@@ -58,7 +64,7 @@ class ChapterParser(HTMLParser):
         elif tag == "footer" and self._in_article:
             # Flush any unclosed <p> before the footer
             if self._in_p and self._buf:
-                text = unescape("".join(self._buf)).strip()
+                text = self._clean(self._buf)
                 if text:
                     self.paragraphs.append(text)
                 self._in_p = False
@@ -71,6 +77,9 @@ class ChapterParser(HTMLParser):
             self._in_p = True
             self._p_class = attrs.get("class")
             self._buf = []
+        elif tag == "li" and self._in_article:
+            self._in_li = True
+            self._buf = []
 
     def handle_endtag(self, tag):
         if tag == "article":
@@ -81,20 +90,29 @@ class ChapterParser(HTMLParser):
             self._in_footer = False
         elif tag == "h1" and self._in_h1:
             self._in_h1 = False
-            self.title = unescape("".join(self._buf)).strip()
+            self.title = self._clean(self._buf)
             self._buf = []
         elif tag == "p" and self._in_p:
             self._in_p = False
-            text = unescape("".join(self._buf)).strip()
+            text = self._clean(self._buf)
             if text:
                 if self._p_class == "author":
-                    self.author = text.removeprefix("By ").strip()
+                    # Source authors are inconsistent ("By X" / "by X" / "X").
+                    self.author = text[3:].strip() if text[:3].lower() == "by " else text
                 elif not self._in_footer:
                     self.paragraphs.append(text)
             self._buf = []
+        elif tag == "li" and self._in_li:
+            self._in_li = False
+            text = self._clean(self._buf)
+            if text and not self._in_footer:
+                # Render each list item as its own paragraph block so the
+                # bullet survives sender.py's "\n\n"-delimited <p> rendering.
+                self.paragraphs.append(f"• {text}")
+            self._buf = []
 
     def handle_data(self, data):
-        if self._in_h1 or self._in_p:
+        if self._in_h1 or self._in_p or self._in_li:
             self._buf.append(data)
 
     def handle_entityref(self, name):

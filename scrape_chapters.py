@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""
+r"""
 Scrapes all 97 chapters from:
   https://yoshi389111.github.io/kinokobooks/soft_en/
 
-Produces chapters.json with title, author, and content fields.
+Produces chapters.json with title, author, and content fields. `content` is a
+"\n\n"-delimited string of blocks, each optionally prefixed with a marker that
+sender.py turns back into markup — see ChapterParser.BLOCKS.
+
 Run this to regenerate chapters.json from the web source.
 """
 
@@ -36,6 +39,22 @@ class IndexParser(HTMLParser):
 class ChapterParser(HTMLParser):
     """Extracts title, body paragraphs, and author from a chapter page."""
 
+    # Block-level tags whose text ends up in the body, mapped to the marker that
+    # survives sender.py's "\n\n"-delimited rendering. <dt> is a subheading in
+    # the one chapter (26) that uses a definition list.
+    BLOCKS = {
+        "p": "",
+        "li": "• ",
+        "dd": "",
+        "h2": "## ",
+        "dt": "## ",
+        "blockquote": "> ",
+    }
+
+    # Placeholder for a break that separates paragraphs *within* one block. The
+    # source hard-wraps prose across lines, so a bare "\n" can't mean this.
+    SPLIT = "\x00"
+
     def __init__(self):
         super().__init__()
         self.title = ""
@@ -44,75 +63,89 @@ class ChapterParser(HTMLParser):
         self._in_article = False
         self._in_header = False
         self._in_footer = False
-        self._in_h1 = False
-        self._in_p = False
-        self._in_li = False
+        self._in_blockquote = False
+        self._block = None
         self._p_class = None
         self._buf = []
 
     @staticmethod
-    def _clean(parts):
+    def _clean(text):
         # Collapse runs of whitespace (incl. source newlines) to single spaces.
-        return " ".join(unescape("".join(parts)).split())
+        return " ".join(unescape(text).split())
+
+    def _flush(self):
+        """Close the open block and emit its paragraphs."""
+        block, buf, p_class = self._block, self._buf, self._p_class
+        self._block, self._buf, self._p_class = None, [], None
+        if block is None:
+            return
+
+        raw = "".join(buf)
+        if block == "h1":
+            self.title = self._clean(raw)
+            return
+        if p_class == "author":
+            text = self._clean(raw)
+            if text:
+                # Source authors are inconsistent ("By X" / "by X" / "X").
+                self.author = text[3:].strip() if text[:3].lower() == "by " else text
+            return
+        if self._in_footer:
+            return
+
+        if block == "dd":
+            # Inside <dd> the source puts each paragraph on its own line
+            # (no wrapping), so newlines there are paragraph breaks.
+            raw = raw.replace("\n", self.SPLIT)
+        # A <p> nested in a <blockquote> is still quoted text.
+        prefix = "> " if self._in_blockquote else self.BLOCKS[block]
+        for part in raw.split(self.SPLIT):
+            text = self._clean(part)
+            if text:
+                self.paragraphs.append(prefix + text)
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
         if tag == "article":
             self._in_article = True
-        elif tag == "header" and self._in_article:
+        elif not self._in_article:
+            return
+        elif tag == "header":
             self._in_header = True
-        elif tag == "footer" and self._in_article:
-            # Flush any unclosed <p> before the footer
-            if self._in_p and self._buf:
-                text = self._clean(self._buf)
-                if text:
-                    self.paragraphs.append(text)
-                self._in_p = False
-                self._buf = []
+        elif tag == "footer":
+            self._flush()
             self._in_footer = True
+        elif tag == "br" and self._block:
+            self._buf.append(self.SPLIT)
         elif tag == "h1" and self._in_header:
-            self._in_h1 = True
-            self._buf = []
-        elif tag == "p" and self._in_article:
-            self._in_p = True
+            self._flush()
+            self._block = "h1"
+        elif tag in self.BLOCKS:
+            # Some source pages open a new <p> without closing the previous
+            # one, so a new block flushes what came before instead of
+            # discarding it.
+            self._flush()
+            if tag == "blockquote":
+                self._in_blockquote = True
+            self._block = tag
             self._p_class = attrs.get("class")
-            self._buf = []
-        elif tag == "li" and self._in_article:
-            self._in_li = True
-            self._buf = []
 
     def handle_endtag(self, tag):
         if tag == "article":
+            self._flush()
             self._in_article = False
         elif tag == "header":
             self._in_header = False
         elif tag == "footer":
             self._in_footer = False
-        elif tag == "h1" and self._in_h1:
-            self._in_h1 = False
-            self.title = self._clean(self._buf)
-            self._buf = []
-        elif tag == "p" and self._in_p:
-            self._in_p = False
-            text = self._clean(self._buf)
-            if text:
-                if self._p_class == "author":
-                    # Source authors are inconsistent ("By X" / "by X" / "X").
-                    self.author = text[3:].strip() if text[:3].lower() == "by " else text
-                elif not self._in_footer:
-                    self.paragraphs.append(text)
-            self._buf = []
-        elif tag == "li" and self._in_li:
-            self._in_li = False
-            text = self._clean(self._buf)
-            if text and not self._in_footer:
-                # Render each list item as its own paragraph block so the
-                # bullet survives sender.py's "\n\n"-delimited <p> rendering.
-                self.paragraphs.append(f"• {text}")
-            self._buf = []
+        elif tag == "blockquote":
+            self._flush()
+            self._in_blockquote = False
+        elif self._block == tag:
+            self._flush()
 
     def handle_data(self, data):
-        if self._in_h1 or self._in_p or self._in_li:
+        if self._block:
             self._buf.append(data)
 
     def handle_entityref(self, name):

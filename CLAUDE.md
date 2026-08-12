@@ -38,6 +38,19 @@ docker compose exec email-sender python3 /app/sender.py --dry-run
 - **`data/sender.lock`** — exclusive lock file held for the duration of each run to prevent concurrent access to state.
 - **`scrape_chapters.py`** — one-off utility to regenerate `chapters.json` from the web source.
 
+### Chapter content format
+
+`content` is a single string of blocks separated by `\n\n`. A leading marker gives the block its type — `scrape_chapters.py` writes these and `render_block()` in `sender.py` renders them:
+
+| Marker | Source tag | Rendered as |
+| --- | --- | --- |
+| `"## "` | `<h2>`, `<dt>` | `<h3>` |
+| `"> "` | `<blockquote>` | `<blockquote>` |
+| `"• "` | `<li>` | `<p>` (bullet kept as text) |
+| *(none)* | `<p>`, `<dd>` | `<p>` |
+
+Adding a marker means updating both files. The plain-text part of the email uses `content` verbatim, so markers double as plain-text formatting.
+
 The container uses [supercronic](https://github.com/aptible/supercronic) (not system cron) so logs stream to stdout. The `data/` directory is mounted as a Docker volume so state and logs survive rebuilds.
 
 ### Execution flow (`sender.py`)

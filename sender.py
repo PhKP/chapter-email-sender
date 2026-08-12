@@ -63,9 +63,18 @@ def load_state():
     return load_json(STATE_FILE)
 
 
+def render_block(block):
+    """Render one content block. See scrape_chapters.py for the markers."""
+    if block.startswith("## "):
+        return f"<h3>{block[3:]}</h3>"
+    if block.startswith("> "):
+        return f"<blockquote>{block[2:]}</blockquote>"
+    return f"<p>{block}</p>"
+
+
 def build_html(chapter, book_title):
     paragraphs = "".join(
-        f"<p>{p.strip()}</p>"
+        render_block(p.strip())
         for p in chapter["content"].split("\n\n")
         if p.strip()
     )
@@ -107,8 +116,22 @@ def build_html(chapter, book_title):
     margin: 0 0 32px 0;
     color: #111;
   }}
+  h3 {{
+    font-size: 19px;
+    font-weight: 700;
+    line-height: 1.4;
+    margin: 32px 0 12px 0;
+    color: #111;
+  }}
   p {{
     margin: 0 0 20px 0;
+  }}
+  blockquote {{
+    margin: 0 0 20px 0;
+    padding-left: 20px;
+    border-left: 3px solid #ddd;
+    color: #444;
+    font-style: italic;
   }}
   .author {{
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
